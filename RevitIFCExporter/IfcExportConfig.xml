@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Config>
+  <!-- The value should be a phase name existed in revit or 'Default phase to export' -->
+  <PhaseToExport>Default phase to export</PhaseToExport>
+  <!-- 1.True 2.False -->
+  <ExportRevitPropertySets>True</ExportRevitPropertySets>
+  <!-- 1.Extra Low 2.Low 3.Medium 4.High -->
+  <LevelOfDetail>Low</LevelOfDetail>
+  <!-- 1.True 2.False -->
+  <Use2DRoomBoundaryForVolume>True</Use2DRoomBoundaryForVolume>
+  <!-- 1.True 2.False -->
+  <IncludeIFCSiteElevation>True</IncludeIFCSiteElevation>
+</Config>

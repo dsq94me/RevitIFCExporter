@@ -1,0 +1,6 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Config>
+  <RevitPath>C:\Program Files\Autodesk\Revit 2019\Revit.exe</RevitPath>
+  <FilePath>C:\Users\junly-laptop\Desktop\ifc</FilePath>
+  <RevitAddinPath>C:\ProgramData\Autodesk\Revit\Addins\2019\IfcExporter</RevitAddinPath>
+</Config>
