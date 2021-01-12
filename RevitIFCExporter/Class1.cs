@@ -38,12 +38,30 @@ namespace IFCExporter
 		}
 	}
 
-	public class RevitApplicationDB : Autodesk.Revit.DB.IExternalDBApplication
+    public class NewFamilyLoadOption : IFamilyLoadOptions
+    {
+        public virtual bool OnFamilyFound(bool familyInUse, out bool overwriteParameterValues)
+        {
+            overwriteParameterValues = false;
+            return true;
+        }
+        public virtual bool OnSharedFamilyFound(Family sharedFamily, bool familyInUse, out FamilySource source, out bool overwriteParameterValues)
+        {
+            overwriteParameterValues = false;
+            source = FamilySource.Family;
+            return true;
+        }
+    }
+
+    public class RevitApplicationDB : Autodesk.Revit.DB.IExternalDBApplication
 	{
 		static public ConcurrentQueue<string> requestQueue = new ConcurrentQueue<string>();
 		static public ConcurrentQueue<string> responseQueue = new ConcurrentQueue<string>();
 
-		public static ExternalEvent s_exEvtHandler4ExportRvtFiles2IFCByPath;
+        static public List<string> familySymbolNames = new List<string>();
+        static public Family familyOut;
+
+        public static ExternalEvent s_exEvtHandler4ExportRvtFiles2IFCByPath;
 		NetworkStream networkStream = null;
 
 		static Autodesk.Revit.ApplicationServices.Application _app = null;
@@ -156,14 +174,14 @@ namespace IFCExporter
 				MessageBox.Show(string.Format("Cannot find file: {0}", configPath));
 				return nProcessed;
 			}
-			foreach (string rvtFile in rvtFiles)
+			foreach (string rfaFile in rvtFiles)
 			{
 				Document doc;
 				try
 				{
-					string fileNameWithExt = rvtFile.Substring(ifcPath.Length + 1);
+					string fileNameWithExt = rfaFile.Substring(ifcPath.Length + 1);
 					string fileName = fileNameWithExt.Substring(0, fileNameWithExt.Length - ".rfa".Length);
-					doc = _app.OpenDocumentFile(rvtFile);
+					doc = _app.OpenDocumentFile(rfaFile);
 					try
 					{
 						ExportConfig exportConfig = ExportConfig.Create(configPath, doc);
@@ -181,8 +199,9 @@ namespace IFCExporter
 								config.Use2DRoomBoundaryForVolume = exportConfig.Use2DRoomBoundaryForVolume;
 								config.IncludeSiteElevation = exportConfig.IncludeIFCSiteElevation;
 								config.UpdateOptions(ifcOptions, new ElementId(-1));
-								doc.Export(ifcPath, fileName + ".ifc", ifcOptions);
-								t.Commit();
+								//doc.Export(ifcPath, fileName + ".ifc", ifcOptions);                                
+                                CreateContainerDocAndExportRfa(rfaFile, ifcPath, fileName + ".ifc", ifcOptions);
+                                t.Commit();
 								nProcessed++;
 							}
 						}
@@ -237,7 +256,7 @@ namespace IFCExporter
                                 config.Use2DRoomBoundaryForVolume = exportConfig.Use2DRoomBoundaryForVolume;
                                 config.IncludeSiteElevation = exportConfig.IncludeIFCSiteElevation;
                                 config.UpdateOptions(ifcOptions, new ElementId(-1));
-                                doc.Export(ifcPath, fileName + ".ifc", ifcOptions);
+                                doc.Export(ifcPath, fileName + ".ifc", ifcOptions);                                
                                 t.Commit();
                                 nProcessed++;
                             }
@@ -256,7 +275,253 @@ namespace IFCExporter
 			}
 			return nProcessed;
 		}
-	}
+
+        static void CreateContainerDocAndExportRfa(string rfaFile, string ifcFilePath, string ifcFileName, IFCExportOptions ifcOptions)
+        {            
+            Document newDoc = _app.NewProjectDocument(_app.DefaultProjectTemplate);
+            NewFamilyLoadOption familyLoadOptions = new NewFamilyLoadOption();
+            Transaction trans = new Transaction(newDoc);
+            trans.Start("LoadFamily");
+            try
+            {
+                newDoc.LoadFamily(rfaFile, familyLoadOptions, out familyOut);
+
+                FamilyPlacementType ftp = familyOut.FamilyPlacementType;
+
+                trans.Commit();
+            }
+            catch (Exception ex)
+            {
+                trans.RollBack();
+                MessageBox.Show("Can't parse the family file!");
+                return;
+            }
+            foreach (ElementId eleId in familyOut.GetFamilySymbolIds())
+            {
+                FamilySymbol currentFamilySymbol = newDoc.GetElement(eleId) as FamilySymbol;
+                familySymbolNames.Add(currentFamilySymbol.Name);
+            }
+
+            ExportRfa2Ifc(newDoc, ifcFilePath, ifcFileName, ifcOptions);
+        }
+
+        static void ExportRfa2Ifc(Document newDoc, string ifcFilePath, string ifcFileName, IFCExportOptions ifcOptions)
+        {
+            string familyOutName = familyOut.Name;
+            IList<String> filesTobeDeleted = new List<String>();
+            int invalidCount = 0;
+            int invalidIndex = -1;
+            char[] invalidChars = new char[] { '/', '\\', ':', '*', '?', '"', '<', '>', '|' };
+
+            if (newDoc != null)
+            {
+                SaveAsOptions saveAsOptions = new SaveAsOptions();
+                saveAsOptions.OverwriteExistingFile = true;
+
+                //create family folder
+                if (!Directory.Exists(ifcFilePath + familyOutName + "\\"))
+                {
+                    Directory.CreateDirectory(ifcFilePath + familyOutName + "\\");
+                }
+                //expor ifc file
+                FamilyInstance famInstance = null;
+                FilteredElementCollector filter = new FilteredElementCollector(newDoc);
+                IList<Element> eles = filter.OfClass(typeof(Autodesk.Revit.DB.View3D)).ToElements();
+                Autodesk.Revit.DB.View3D view3D = null;
+                foreach (Element ele in eles)
+                {
+                    if (!(ele as Autodesk.Revit.DB.View3D).IsTemplate)
+                    {
+                        view3D = ele as Autodesk.Revit.DB.View3D;
+                        break;
+                    }
+                }
+
+                if (null == view3D)
+                {
+                    Transaction viewTrans = new Transaction(newDoc, "view");
+                    viewTrans.Start();
+                    ViewFamilyType viewFamilyType3D
+                    = new FilteredElementCollector(newDoc)
+                      .OfClass(typeof(ViewFamilyType))
+                      .Cast<ViewFamilyType>()
+                      .FirstOrDefault<ViewFamilyType>(
+                        x => ViewFamily.ThreeDimensional
+                          == x.ViewFamily);
+
+                    view3D = View3D.CreateIsometric(
+                      newDoc, viewFamilyType3D.Id);
+                    viewTrans.Commit();
+                }
+
+                Transaction tran = new Transaction(newDoc);
+                foreach (String familySymbolName in familySymbolNames)
+                {
+                    tran.Start("DeleteElement");
+                    if (famInstance != null)
+                    {
+                        newDoc.Delete(famInstance.Id);
+                    }
+                    tran.Commit();
+
+                    FamilySymbol familySymbol = null;
+                    CheckFamilySymbol(familyOut, familySymbolName, ref familySymbol);
+                    if (familySymbol != null)
+                    {                                           
+                        string symbolName = familySymbol.Name;
+                        invalidIndex = -1;
+     
+                        invalidIndex = familySymbolName.IndexOfAny(invalidChars);
+                        while (invalidIndex != -1)
+                    {
+                        symbolName = symbolName.Remove(invalidIndex);
+                        invalidCount++;
+
+                        invalidIndex = symbolName.IndexOfAny(invalidChars);
+                    }
+                        if (invalidCount > 0)
+                        {
+                            MessageBox.Show("The familySymbol name contains the illegal character!\n\"/\\:,*?\"<>|\", they will be removed.");
+                        }
+     
+                        try
+                        {
+                            tran.Start("CreateFamilyInstance");
+
+                            if (!familySymbol.IsActive)
+                                familySymbol.Activate();
+
+                            if (familyOut.FamilyPlacementType == FamilyPlacementType.OneLevelBased)
+                            {
+                                famInstance = newDoc.Create.NewFamilyInstance(XYZ.Zero, familySymbol, Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
+                            }
+                            else
+                                if (familyOut.FamilyPlacementType == FamilyPlacementType.OneLevelBasedHosted)
+                            {
+                                // Build a location line for the wall creation
+                                XYZ start = new XYZ(-10, 0, 0);
+                                XYZ end = new XYZ(10, 0, 0);
+                                Line geomLine = Line.CreateBound(start, end);
+                                double elevation = 20.0;
+                                Level lvl = Level.Create(newDoc, elevation);
+                                Wall wall = Wall.Create(newDoc, geomLine, lvl.Id, true);
+                                IList<ElementId> elementIdSet = new List<ElementId>();
+                                elementIdSet.Add(wall.Id);
+                                view3D.HideElements(elementIdSet);
+                                famInstance = newDoc.Create.NewFamilyInstance(XYZ.Zero, familySymbol, wall, lvl, Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
+                            }
+                            else
+                            {
+                                if (tran.GetStatus() == TransactionStatus.Started)
+                                {
+                                    tran.RollBack();
+                                }
+                                MessageBox.Show("Only for the OneLevelBased or OneLevelBasedHosted family!");
+                                break;
+                            }
+                        
+                            tran.Commit();
+                            if (famInstance != null)
+                            {
+                                newDoc.SaveAs(ifcFilePath + familyOutName + "\\" + symbolName + ".rvt", saveAsOptions);
+                                filesTobeDeleted.Add(ifcFilePath + familyOutName + "\\" + symbolName + ".rvt");
+                                tran.Start("ExportIFC");
+                                IFCExportOptions ifcExp = new IFCExportOptions();
+                                ifcExp.FilterViewId = view3D.Id;
+                                bool bl = newDoc.Export(ifcFilePath + familyOutName + "\\", symbolName, ifcExp);
+                                tran.Commit();
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            if (tran.GetStatus() == TransactionStatus.Started)
+                            {
+                                tran.RollBack();
+                            }
+                            MessageBox.Show(ex.ToString());
+                        }
+                    }
+                }
+                // close family file
+                newDoc.Close(false);
+                //delete the temporary revit files
+                foreach (String filePath in filesTobeDeleted)
+                {
+                    File.Delete(filePath);
+                }
+            }
+        }
+
+        public static bool LoadFamilyStr(Document doc, String familyPath, String familyName, ref Family familyOut)
+        {
+
+            NewFamilyLoadOption myOptions = new NewFamilyLoadOption();
+            bool hasLoadFamily = false;
+
+            FilteredElementCollector collector = new FilteredElementCollector(doc);
+            IList<Element> allFamilies = collector.OfClass(typeof(Family)).ToElements();
+            for (int i = 0; i < allFamilies.Count; i++)
+            {
+                Family family = allFamilies[i] as Family;
+                if (allFamilies[i].Name == familyName)
+                {
+                    familyOut = family;
+                    hasLoadFamily = true;
+                    break;
+                }
+            }
+            if (!hasLoadFamily)
+            {
+                if (!doc.LoadFamily(familyPath + familyName + ".rfa", myOptions, out familyOut))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+
+        public static bool CheckFamilySymbol(Family family, string beamTypeStr, ref FamilySymbol fmSymbol)
+        {
+            ISet<ElementId> familySymbolIds = family.GetFamilySymbolIds();
+            bool IsTrue = false;
+            if (familySymbolIds.Count > 0)
+            {
+                // Get family symbols which is contained in this family
+                foreach (ElementId id in familySymbolIds)
+                {
+                    FamilySymbol familySymbol = family.Document.GetElement(id) as FamilySymbol;
+                    // Get family symbol name
+
+                    if (familySymbol.Name == beamTypeStr)
+                    {
+                        IsTrue = true;
+                        fmSymbol = familySymbol;
+                        return IsTrue;                        
+                    }
+                }
+            }
+            return IsTrue;
+            /*
+                        FamilySymbolSetIterator famSymSetIte = family.Symbols.ForwardIterator();
+                        bool IsTrue = false;
+                        famSymSetIte.Reset();
+                        while (famSymSetIte.MoveNext())
+                        {
+                            if ((((FamilySymbol)(famSymSetIte.Current))).Name == beamTypeStr)
+                            {
+                                familySymbol = (FamilySymbol)(famSymSetIte.Current);
+                                IsTrue = true;
+                                return IsTrue;
+                            }
+                        }
+                        famSymSetIte.Reset();
+                        famSymSetIte.MoveNext();
+                        familySymbol = (FamilySymbol)(famSymSetIte.Current);
+                        return IsTrue;
+            */
+        }
+    }
 
     class ExportConfig
     {
