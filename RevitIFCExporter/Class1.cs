@@ -94,7 +94,6 @@ namespace IFCExporter
 			});
 		}
 
-		//private async void Process()
 		private void ReceiveAndRespondRequests()
 		{
 			Int32 port = 13000;
@@ -198,8 +197,7 @@ namespace IFCExporter
 								config.TessellationLevelOfDetail = exportConfig.LevelOfDetail;
 								config.Use2DRoomBoundaryForVolume = exportConfig.Use2DRoomBoundaryForVolume;
 								config.IncludeSiteElevation = exportConfig.IncludeIFCSiteElevation;
-								config.UpdateOptions(ifcOptions, new ElementId(-1));
-								//doc.Export(ifcPath, fileName + ".ifc", ifcOptions);                                
+								config.UpdateOptions(ifcOptions, new ElementId(-1));                         
                                 CreateContainerDocAndExportRfa(rfaFile, ifcPath, fileName + ".ifc", ifcOptions);
                                 t.Commit();
 								nProcessed++;
@@ -501,25 +499,7 @@ namespace IFCExporter
                     }
                 }
             }
-            return IsTrue;
-            /*
-                        FamilySymbolSetIterator famSymSetIte = family.Symbols.ForwardIterator();
-                        bool IsTrue = false;
-                        famSymSetIte.Reset();
-                        while (famSymSetIte.MoveNext())
-                        {
-                            if ((((FamilySymbol)(famSymSetIte.Current))).Name == beamTypeStr)
-                            {
-                                familySymbol = (FamilySymbol)(famSymSetIte.Current);
-                                IsTrue = true;
-                                return IsTrue;
-                            }
-                        }
-                        famSymSetIte.Reset();
-                        famSymSetIte.MoveNext();
-                        familySymbol = (FamilySymbol)(famSymSetIte.Current);
-                        return IsTrue;
-            */
+            return IsTrue;           
         }
     }
 
